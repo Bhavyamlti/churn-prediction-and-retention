@@ -1,0 +1,5 @@
+outs:
+- md5: 270aace7f84670ba6ebb93e9ec6134db
+  size: 1567
+  hash: md5
+  path: logistic_v1.pkl
