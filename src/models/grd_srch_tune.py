@@ -2,11 +2,15 @@
 import os
 import joblib
 import pandas as pd
+import numpy as np
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
 from sklearn.metrics import classification_report
 from xgboost import XGBClassifier
+from sklearn.metrics import accuracy_score, recall_score, roc_auc_score, precision_score
+from catboost import CatBoostClassifier
+
 
 # Paths
 MODEL_DIR = "src/models"
@@ -102,3 +106,42 @@ for model, params in results.items():
 # Save Logistic Regression v3 model
 joblib.dump(grid_lr.best_estimator_, "src/models/logistic_v3.pkl")
 print("✅ Saved: src/models/logistic_v3.pkl")
+
+# ===============================
+# CatBoost - Version 1 (pre-tuned for recall)
+# ===============================
+print("Training CatBoost v1 (recall-optimized)...")
+
+# these params are from the notebook you found with ~91% recall
+catboost_v1 = CatBoostClassifier(
+    verbose=False,
+    random_state=0,
+    scale_pos_weight=5 # handles imbalance
+)
+
+categorical_features_indices = np.where(X_train.dtypes != float)[0]
+
+catboost_v1.fit(
+    X_train, y_train,
+    cat_features=categorical_features_indices,
+    eval_set=(X_test, y_test)
+)
+
+# ===============================
+# Evaluate
+# ===============================
+y_pred = catboost_v1.predict(X_test)
+
+accuracy = round(accuracy_score(y_test, y_pred), 4)
+recall = round(recall_score(y_test, y_pred), 4)
+roc_auc = round(roc_auc_score(y_test, y_pred), 4)
+precision = round(precision_score(y_test, y_pred), 4)
+
+print(f"CatBoost v1 Results -> Accuracy: {accuracy}, Recall: {recall}, ROC_AUC: {roc_auc}, Precision: {precision}")
+
+# ===============================
+# Save Model
+# ===============================
+model_path = "models/catboost_v1.pkl"
+joblib.dump(catboost_v1, model_path)
+print(f"✅ CatBoost v1 saved at {model_path}")
