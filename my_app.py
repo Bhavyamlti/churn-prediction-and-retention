@@ -1,87 +1,64 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
-from sklearn.compose import ColumnTransformer
-from sklearn.pipeline import Pipeline
-from sklearn.decomposition import PCA
-from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import train_test_split
-from sklearn.cluster import KMeans
-import shap
+import joblib
 import matplotlib.pyplot as plt
 from lifelines import KaplanMeierFitter
+from sklearn.cluster import KMeans
 import altair as alt
+import shap
 
+# ===============================
+# Page config
+# ===============================
 st.set_page_config(page_title="Customer Churn Dashboard", layout="wide")
 st.title("Customer Churn Prediction & Analysis")
 
-# -------------------------------
+# ===============================
 # Load dataset
-# -------------------------------
-data = pd.read_csv("C:/Users/T8569/Downloads/WA_Fn-UseC_-Telco-Customer-Churn.csv")
-
-# -------------------------------
-# Features and target
-# -------------------------------
-features = ['tenure', 'MonthlyCharges', 'Contract', 'InternetService']
-X = data[features].copy()
+# ===============================
+data_path = "C:/Users/T8569/Downloads/WA_Fn-UseC_-Telco-Customer-Churn.csv"
+data = pd.read_csv(data_path)
+data['TotalCharges'] = pd.to_numeric(data['TotalCharges'], errors='coerce')
+data.fillna(0, inplace=True)
 y = (data['Churn'] == 'Yes').astype(int)
 
-# Fill missing numeric values
-X['tenure'] = pd.to_numeric(X['tenure'], errors='coerce')
-X['MonthlyCharges'] = pd.to_numeric(X['MonthlyCharges'], errors='coerce')
-X = X.fillna(0)
+# ===============================
+# Features
+# ===============================
+numeric_features = ['tenure', 'MonthlyCharges', 'TotalCharges']
+categorical_features = ['Contract', 'InternetService', 'Dependents', 'PhoneService', 'MultipleLines',
+                        'OnlineSecurity', 'OnlineBackup', 'DeviceProtection', 'TechSupport',
+                        'StreamingTV','StreamingMovies', 'PaymentMethod']
 
-# -------------------------------
-# Define categorical and numeric features
-# -------------------------------
-numeric_features = ['tenure', 'MonthlyCharges']
-categorical_features = ['Contract', 'InternetService']
+# ===============================
+# Load PCA + Logistic pipeline
+# ===============================
+pipeline = joblib.load("src/models/logistic_v3.pkl")
 
-# -------------------------------
-# Preprocessing + Logistic Regression Pipeline
-# -------------------------------
-preprocessor = ColumnTransformer([
-    ('num', StandardScaler(), numeric_features),
-    ('cat', OneHotEncoder(drop='first'), categorical_features)
-])
+# ===============================
+# KMeans clustering
+# ===============================
+# For simplicity, scale + PCA first
+X_cat = pipeline['encoder'].transform(data[['Contract','InternetService']])
+X_num = data[['tenure','MonthlyCharges']].values
+X_processed = np.hstack([X_num, X_cat])
+X_scaled = pipeline['scaler'].transform(X_processed)
+X_pca = pipeline['pca'].transform(X_scaled)
 
-pipeline = Pipeline([
-    ('preprocessor', preprocessor),
-    ('pca', PCA(n_components=2)),
-    ('logistic', LogisticRegression(random_state=42))
-])
-
-# Train-test split
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.15, random_state=42)
-
-# Fit pipeline
-pipeline.fit(X_train, y_train)
-
-# -------------------------------
-# KMeans Clustering
-# -------------------------------
-X_scaled = preprocessor.fit_transform(X)
 kmeans = KMeans(n_clusters=3, random_state=42)
-clusters = kmeans.fit_predict(X_scaled)
+clusters = kmeans.fit_predict(X_pca)
 data['Cluster'] = clusters
+cluster_map = {0:"Low-value / Price-sensitive",
+               1:"Medium-value / At-risk",
+               2:"High-value / Premium"}
 
-cluster_map = {
-    0: "Low-value / Price-sensitive",
-    1: "Medium-value / At-risk",
-    2: "High-value / Premium"
-}
-
-# -------------------------------
-# Kaplan-Meier Survival / Retention
-# -------------------------------
+# ===============================
+# Kaplan-Meier Retention
+# ===============================
 kmf = KaplanMeierFitter()
-T = data['tenure']
-E = y
-kmf.fit(T, event_observed=E)
+kmf.fit(data['tenure'], event_observed=y)
 
-# Plot KM curve
 km_fig, km_ax = plt.subplots(figsize=(6,4))
 kmf.plot_survival_function(ax=km_ax)
 km_ax.set_xlabel("Tenure (months)")
@@ -90,122 +67,92 @@ km_ax.set_title("Customer Retention / Survival Curve")
 st.subheader("Overall Retention Curve")
 st.pyplot(km_fig)
 
-# -------------------------------
-# User Input for Prediction
-# -------------------------------
+# ===============================
+# User Input
+# ===============================
 st.subheader("Predict Churn for a New Customer")
+col1, col2 = st.columns(2)
 
-input_col1, input_col2 = st.columns(2)
+with col1:
+    tenure = st.number_input("Tenure (months)", 0, 100, 12)
+    monthly_charges = st.number_input("Monthly Charges", 0.0, 1000.0, 70.0)
+    contract = st.selectbox("Contract Type", ["Month-to-month","One year","Two year"])
+    internet_service = st.selectbox("Internet Service", ["DSL","Fiber optic","No"])
 
-with input_col1:
-    tenure = st.slider("Tenure (months)", 0, 100, 12)  # increased range
-    monthly_charges = st.slider("Monthly Charges", 0, 1000, 70)  # increased range
-with input_col2:
-    contract = st.selectbox("Contract Type", ["Month-to-month", "One year", "Two year"])
-    internet_service = st.selectbox("Internet Service", ["DSL", "Fiber optic", "No"])
-
-user_df = pd.DataFrame({
-    'tenure': [tenure],
-    'MonthlyCharges': [monthly_charges],
-    'Contract': [contract],
-    'InternetService': [internet_service]
+# ===============================
+# Prepare user input for prediction
+# ===============================
+user_input = pd.DataFrame({
+    'tenure':[tenure],
+    'MonthlyCharges':[monthly_charges],
+    'Contract':[contract],
+    'InternetService':[internet_service]
 })
 
-# Preprocess + PCA
-user_transformed = pipeline.named_steps['pca'].transform(
-    pipeline.named_steps['preprocessor'].transform(user_df)
-)
+# PCA + Logistic preprocessing
+user_cat = pipeline['encoder'].transform(user_input[['Contract','InternetService']])
+user_num = user_input[['tenure','MonthlyCharges']].values
+user_processed = np.hstack([user_num, user_cat])
+user_scaled = pipeline['scaler'].transform(user_processed)
+user_pca = pipeline['pca'].transform(user_scaled)
 
-# Churn probability
-churn_prob = pipeline.named_steps['logistic'].predict_proba(user_transformed)[0][1]
-
-# Retention probability from KM
+# Predict
+churn_prob = pipeline['logistic'].predict_proba(user_pca)[0][1]
 km_prob = kmf.survival_function_at_times(tenure).values[0]
+user_cluster = kmeans.predict(user_pca)[0]
 
-# Cluster assignment
-user_cluster = kmeans.predict(preprocessor.transform(user_df))[0]
-
-# -------------------------------
-# Display Metrics with Color
-# -------------------------------
+# ===============================
+# Display Metrics
+# ===============================
 st.subheader("Predicted Metrics")
-metric_col1, metric_col2, metric_col3 = st.columns(3)
+m1, m2, m3 = st.columns(3)
 
-# Churn risk color coding
 if churn_prob < 0.3:
-    metric_col1.success(f"{churn_prob:.2%} (Low Risk)")
+    m1.success(f"{churn_prob:.2%} (Low Risk)")
 elif churn_prob < 0.7:
-    metric_col1.warning(f"{churn_prob:.2%} (Medium Risk)")
+    m1.warning(f"{churn_prob:.2%} (Medium Risk)")
 else:
-    metric_col1.error(f"{churn_prob:.2%} (High Risk)")
+    m1.error(f"{churn_prob:.2%} (High Risk)")
 
-metric_col2.metric("Estimated Retention", f"{km_prob:.2%}")
-metric_col3.metric("Customer Segment", cluster_map[user_cluster])
+m2.metric("Estimated Retention", f"{km_prob:.2%}")
+m3.metric("Customer Segment", cluster_map[user_cluster])
 
-# -------------------------------
-# SHAP Explanation as Text (using model without PCA)
-# -------------------------------
+# ===============================
+# SHAP explanation
+# ===============================
 st.subheader("Possible Reasons for Churn")
+explainer = shap.LinearExplainer(pipeline['logistic'], X_pca)
+shap_values = explainer.shap_values(user_pca)[0]
 
-# Build a pipeline without PCA for SHAP explanations
-logistic_no_pca = Pipeline([
-    ('preprocessor', preprocessor),
-    ('logistic', LogisticRegression(random_state=42))
-])
-logistic_no_pca.fit(X_train, y_train)
+feature_names = np.array(['tenure','MonthlyCharges'] + list(pipeline['encoder'].get_feature_names_out()))
+importance = sorted(zip(feature_names, shap_values), key=lambda x: abs(x[1]), reverse=True)
 
-# Get feature names after preprocessing
-ohe = preprocessor.named_transformers_['cat']
-ohe_features = ohe.get_feature_names_out(categorical_features)
-all_features = numeric_features + list(ohe_features)
-
-# Transform input for SHAP
-user_preprocessed = preprocessor.transform(user_df)
-X_train_preprocessed = preprocessor.transform(X_train)
-
-# SHAP explainer on non-PCA logistic regression
-explainer = shap.LinearExplainer(logistic_no_pca.named_steps['logistic'], X_train_preprocessed)
-shap_values = explainer.shap_values(user_preprocessed)[0]
-
-# Rank features by importance
-feature_importance = sorted(
-    zip(all_features, shap_values),
-    key=lambda x: abs(x[1]),
-    reverse=True
-)
-
-# Display top churn reasons
-st.write("**Top Factors Influencing This Prediction:**")
-for feature, value in feature_importance[:5]:
-    clean_feature = feature.replace("Contract_", "").replace("InternetService_", "")
-    if value > 0:
-        st.write(f"- {clean_feature} **increases churn risk**")
+for f, val in importance[:5]:
+    if val > 0:
+        st.write(f"- {f} **increases churn risk**")
     else:
-        st.write(f"- {clean_feature} **reduces churn risk**")
+        st.write(f"- {f} **reduces churn risk**")
 
-
-# -------------------------------
-# Compare User vs Cluster Averages (safe check)
-# -------------------------------
+# ===============================
+# User vs Cluster Comparison
+# ===============================
 st.subheader("User vs Segment Comparison")
-
 cluster_data = data[data['Cluster'] == user_cluster]
 
 if not cluster_data.empty:
-    cluster_avg = cluster_data[['tenure', 'MonthlyCharges']].mean().reset_index()
-    cluster_avg.columns = ['Feature', 'Average']
+    cluster_avg = cluster_data[['tenure','MonthlyCharges']].mean().reset_index()
+    cluster_avg.columns = ['Feature','Average']
 
     user_values = pd.DataFrame({
-        'Feature': ['tenure', 'MonthlyCharges'],
-        'Average': [tenure, monthly_charges]
+        'Feature':['tenure','MonthlyCharges'],
+        'Average':[tenure, monthly_charges]
     })
 
-    comparison_chart = alt.Chart(cluster_avg).mark_bar(color='lightblue').encode(
+    chart = alt.Chart(cluster_avg).mark_bar(color='lightblue').encode(
         x='Feature', y='Average'
     ) + alt.Chart(user_values).mark_bar(color='orange').encode(
         x='Feature', y='Average'
     )
-
-    st.altair_chart(comparison_chart, use_container_width=True)
+    st.altair_chart(chart, use_container_width=True)
 else:
     st.info("No cluster data available for comparison.")

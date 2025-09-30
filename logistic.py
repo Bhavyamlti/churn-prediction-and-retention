@@ -1,59 +1,54 @@
-import pandas as pd
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
-from sklearn.compose import ColumnTransformer
+import joblib
 from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.decomposition import PCA
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, precision_score, recall_score
+import numpy as np
+import pandas as pd
 
-# Load original dataset
-data = pd.read_csv("C:/Users/T8569/Downloads/WA_Fn-UseC_-Telco-Customer-Churn.csv")
+# ===============================
+# Load original training dataset
+# ===============================
+data_path = "C:/Users/T8569/Downloads/WA_Fn-UseC_-Telco-Customer-Churn.csv"
+df = pd.read_csv(data_path)
 
-# Features for UI
-features = ['tenure', 'MonthlyCharges', 'TotalCharges', 'Dependents']
-X = data[features].copy()
-y = (data['Churn'] == 'Yes').astype(int)
+# Preprocessing
+df['TotalCharges'] = pd.to_numeric(df['TotalCharges'], errors='coerce')
+df.fillna(0, inplace=True)
 
-# Convert TotalCharges to numeric (fix empty strings)
-X['TotalCharges'] = pd.to_numeric(X['TotalCharges'], errors='coerce')
+# Features
+features = ['tenure', 'MonthlyCharges', 'Contract', 'InternetService']
+X = df[features]
 
-# Fill missing values
-X = X.fillna(0)
+# Encode categorical features
+categorical_cols = ['Contract','InternetService']
+encoder = OneHotEncoder(sparse_output=False, drop='first')
+X_cat = encoder.fit_transform(X[categorical_cols])
+X_num = X.drop(columns=categorical_cols).values
+X_processed = np.hstack([X_num, X_cat])
 
-# Define categorical and numeric features
-categorical_features = ['Dependents']
-numeric_features = ['tenure', 'MonthlyCharges', 'TotalCharges']
+# Target
+y = df['Churn'].map({'Yes':1,'No':0}).values
 
-# Preprocessing pipeline
-preprocessor = ColumnTransformer(
-    transformers=[
-        ('num', StandardScaler(), numeric_features),
-        ('cat', OneHotEncoder(drop='first'), categorical_features)
-    ]
-)
+# Scale and PCA
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X_processed)
+pca = PCA(n_components=3)
+X_pca = pca.fit_transform(X_scaled)
 
-# Train-test split
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.15, random_state=42)
+# Train Logistic Regression
+model = LogisticRegression()
+model.fit(X_pca, y)
 
-# Full pipeline: preprocessing + PCA + LogisticRegression
-pipeline = Pipeline([
-    ('preprocessor', preprocessor),
-    ('pca', PCA(n_components=2)),
-    ('logistic', LogisticRegression(random_state=42))
-])
+# ===============================
+# Save full pipeline as logistic_v3
+# ===============================
+pipeline = {
+    'encoder': encoder,
+    'scaler': scaler,
+    'pca': pca,
+    'logistic': model
+}
 
-# Train
-pipeline.fit(X_train, y_train)
-
-# Predictions
-y_pred = pipeline.predict(X_test)
-
-# Metrics
-accuracy = accuracy_score(y_test, y_pred)
-precision = precision_score(y_test, y_pred)
-recall = recall_score(y_test, y_pred)
-
-print(f"Accuracy: {accuracy:.4f}")
-print(f"Precision: {precision:.4f}")
-print(f"Recall: {recall:.4f}")
+joblib.dump(pipeline, "src/models/logistic_v3.pkl")
+print("Saved PCA + Logistic pipeline as logistic_v3.pkl")

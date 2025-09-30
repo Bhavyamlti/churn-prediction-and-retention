@@ -145,3 +145,62 @@ print(f"CatBoost v1 Results -> Accuracy: {accuracy}, Recall: {recall}, ROC_AUC: 
 model_path = "models/catboost_v1.pkl"
 joblib.dump(catboost_v1, model_path)
 print(f"✅ CatBoost v1 saved at {model_path}")
+
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+from catboost import CatBoostClassifier
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+
+# -------------------------------
+# Load dataset
+# -------------------------------
+data = pd.read_csv("C:/Users/T8569/Downloads/WA_Fn-UseC_-Telco-Customer-Churn.csv")
+
+# Target
+y = (data['Churn'] == 'Yes').astype(int)
+
+# Features (all except customerID and Churn)
+X = data.drop(columns=['customerID', 'Churn'])
+
+# -------------------------------
+# Encode categorical columns
+# -------------------------------
+categorical_cols = X.select_dtypes(include='object').columns
+for col in categorical_cols:
+    X[col] = LabelEncoder().fit_transform(X[col])
+
+# -------------------------------
+# Train-test split
+# -------------------------------
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
+)
+
+# -------------------------------
+# Train CatBoost
+# -------------------------------
+cat_model = CatBoostClassifier(
+    iterations=500,
+    learning_rate=0.05,
+    depth=6,
+    l2_leaf_reg=3,
+    random_state=42,
+    verbose=100,
+    eval_metric='Recall',
+    auto_class_weights='Balanced'
+)
+
+cat_model.fit(X_train, y_train, eval_set=(X_test, y_test), verbose=100)
+
+# -------------------------------
+# Evaluate Performance
+# -------------------------------
+y_pred = cat_model.predict(X_test)
+
+print(f"Accuracy: {accuracy_score(y_test, y_pred):.4f}")
+print(f"Precision: {precision_score(y_test, y_pred):.4f}")
+print(f"Recall: {recall_score(y_test, y_pred):.4f}")
+print(f"F1 Score: {f1_score(y_test, y_pred):.4f}")
+
+cat_model.save_model('models/catboost_v3.cbm')
